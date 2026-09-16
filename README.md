@@ -1,5 +1,7 @@
 # LINE on Bottles
 
+*[English](README.en.md)*
+
 在 Ubuntu 上執行 Windows 版 LINE,跑在 Flatpak Bottles + Wine 之中,並用一台專屬的巢狀 X server(Xephyr `:99`)把它與主桌面隔開。
 
 這個 repo 收的是**外殼層** —— 啟動流程、systemd 服務、輸入法橋接、版本切換與安裝腳本。LINE 本體與你的聊天記錄留在 Wine prefix 裡,不進版控。
@@ -76,3 +78,7 @@ GNOME 桌面 (:1)
 | `docs/` | 架構、疑難排解、版本管理 |
 
 `lib/` 下的程式只用 Python 標準函式庫,沒有第三方相依。
+
+## 授權
+
+MIT,見 [LICENSE](LICENSE)。本專案只打包外圍基礎設施,不轉散布 LINE、Wine、Bottles 或 DXVK 本身。
