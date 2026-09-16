@@ -9,6 +9,7 @@ LINE 原本的佈局是 bin/current（實體目錄）與 bin/old（上一版）�
 這樣切換版本只是重指一條符號連結，且 Data/（聊天記錄、登入狀態）完全不受影響
 ──它在 bin/ 之外，各版本共用。
 """
+import hashlib
 import os
 import shutil
 import subprocess as sp
@@ -64,6 +65,20 @@ def detect_version(directory):
     return file_version(directory / 'LINE.exe') or 'unknown'
 
 
+def content_hash(directory):
+    """整個目錄的內容雜湊。
+
+    只比對 LINE.exe 的版本號並不足以判斷兩份是否相同：實測過 bin/old 與
+    bin/current 的 LINE.exe 位元組完全相同，但其餘檔案有差異。要刪除或判定
+    重複，必須看整個目錄。
+    """
+    digest = hashlib.md5()
+    for path in sorted(p for p in directory.rglob('*') if p.is_file()):
+        digest.update(str(path.relative_to(directory)).encode())
+        digest.update(hashlib.md5(path.read_bytes()).digest())
+    return digest.hexdigest()
+
+
 def installed():
     """回傳 [(版本名, 目錄)]，依版本名排序。"""
     if not VERSIONS.is_dir():
@@ -102,13 +117,16 @@ def migrate():
     old = BIN / 'old'
     if old.is_dir():
         old_version = detect_version(old)
-        if old_version == version:
-            print(f'{DIM}  bin/old 與目前版本同為 {version}（重複資料，'
+        info('比對 bin/old 的內容…')
+        if old_version == version and content_hash(old) == content_hash(target):
+            print(f'{DIM}  bin/old 與 {version} 內容完全相同（純重複資料，'
                   f'可用 line-version prune 移除）{RST}')
         else:
-            info(f'把 bin/old（{old_version}）一併收進 versions/')
-            shutil.move(str(old), str(VERSIONS / old_version))
-            ok(f'已收錄 {old_version}')
+            # LINE.exe 版本號可能相同但其餘檔案有差異，這種情況要另取名字保留。
+            name = old_version if old_version != version else f'{version}-old'
+            info(f'把 bin/old 收進 versions/{name}')
+            shutil.move(str(old), str(VERSIONS / name))
+            ok(f'已收錄 {name}')
 
 
 def cmd_list():
@@ -192,16 +210,24 @@ def cmd_status():
 
 
 def cmd_prune():
-    """移除與目前版本內容重複的 bin/old。"""
+    """移除 bin/old —— 但只在它的內容與某個已收錄版本完全相同時。"""
     old = BIN / 'old'
     if not old.is_dir():
         ok('沒有 bin/old，無需清理。')
         return
     require_stopped()
+
+    info('比對 bin/old 與已收錄的版本…')
+    old_hash = content_hash(old)
+    duplicate_of = next((name for name, directory in installed()
+                         if content_hash(directory) == old_hash), None)
+    if duplicate_of is None:
+        die('bin/old 的內容與任何已收錄版本都不同，刪掉就永遠拿不回來了。\n'
+            '請改用 line-version migrate 把它收進 versions/。')
+
     size = sum(f.stat().st_size for f in old.rglob('*') if f.is_file()) // (1024 * 1024)
-    version = detect_version(old)
-    answer = input(f'將刪除 bin/old（版本 {version}，{size} MB）。確定？[y/N] ')
-    if answer.strip().lower() != 'y':
+    print(f'  bin/old 與 versions/{duplicate_of} 內容完全相同（{size} MB）')
+    if input('  確定刪除？[y/N] ').strip().lower() != 'y':
         print('已取消。')
         return
     shutil.rmtree(old)
