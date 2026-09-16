@@ -1,0 +1,10 @@
+[Unit]
+Description=LINE desktop session with startup checks and exit cleanup
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/line-bottles --session
+ExecStopPost=%h/.local/bin/line-bottles --cleanup
+Restart=no
+TimeoutStopSec=35
+KillMode=mixed

@@ -1,0 +1,14 @@
+[Unit]
+Description=Local X11 bridge for LINE Flatpak
+Requires=line-xephyr.service
+BindsTo=line-xephyr.service
+PartOf=line-session.service
+After=line-xephyr.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/socat TCP4-LISTEN:6099,bind=127.0.0.1,reuseaddr,fork UNIX-CONNECT:/tmp/.X11-unix/X99
+SuccessExitStatus=143
+Restart=no
+RestartSec=1
+

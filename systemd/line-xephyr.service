@@ -1,0 +1,11 @@
+[Unit]
+Description=Nested X server for LINE in Bottles
+PartOf=line-session.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/Xephyr :99 -screen 1280x800 -resizeable -ac -br -noreset -title LINE
+SuccessExitStatus=1
+Restart=no
+RestartSec=1
+

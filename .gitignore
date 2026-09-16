@@ -1,0 +1,20 @@
+# 私鑰與憑證：安裝時現場產生，絕不進版控
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+
+# 由範本產生的實體腳本（.in 才是原始碼）
+/bin/line-bottles
+/bin/line-version
+/desktop/line.desktop
+
+# Python 編譯快取
+__pycache__/
+*.py[cod]
+
+# 執行期狀態、日誌、備份
+/state/
+*.log
+*.tmp

@@ -1,0 +1,18 @@
+[Desktop Entry]
+Exec=@HOME@/.local/bin/line-bottles
+Type=Application
+Terminal=false
+Categories=Network;InstantMessaging;
+Comment=LINE 通訊軟體（透過 Bottles 執行）
+StartupWMClass=Xephyr
+Name=LINE
+Icon=@HOME@/.var/app/com.usebottles.bottles/data/bottles/bottles/Line/icons/LineLauncher.png
+Actions=Recover;Stop;
+
+[Desktop Action Recover]
+Name=修復並重新啟動
+Exec=@HOME@/.local/bin/line-bottles --recover
+
+[Desktop Action Stop]
+Name=關閉 LINE 與黑視窗
+Exec=@HOME@/.local/bin/line-bottles --stop

@@ -1,0 +1,15 @@
+[Unit]
+Description=Window and keyboard focus management for LINE
+BindsTo=line-xephyr.service
+After=line-xephyr.service
+PartOf=line-session.service
+
+[Service]
+Type=simple
+Environment=DISPLAY=:99
+ExecStart=/usr/bin/openbox --sm-disable
+SuccessExitStatus=1
+# openbox 無狀態，卡住就直接殺，別讓它拖垮整個啟動流程的重試。
+TimeoutStopSec=5
+Restart=no
+RestartSec=1

@@ -1,0 +1,22 @@
+# 本機自簽程式碼簽章憑證的產生參數。
+#
+# 用途：LINE 會檢查它載入的 DLL 是否帶有簽章，而 Wine 的系統 DLL 原本沒有簽章，
+# 因此需要在「這個 Wine prefix 內部」把它們簽過一遍。這張憑證：
+#   - 只匯入該 prefix 的信任存放區，不碰主機的憑證存放區
+#   - 不對外發佈，也不用於任何網路信任
+#   - 主體名稱如實標示來源，不冒用任何廠商身分
+[req]
+prompt             = no
+default_md         = sha256
+default_bits       = 2048
+distinguished_name = dn
+x509_extensions    = v3_req
+
+[dn]
+O  = LINE-Bottles Local Build
+CN = LINE-Bottles Local Wine Signing
+
+[v3_req]
+basicConstraints = critical, CA:FALSE
+keyUsage         = critical, digitalSignature
+extendedKeyUsage = critical, codeSigning

@@ -1,0 +1,23 @@
+[Unit]
+Description=Input method for the LINE nested display
+BindsTo=line-xephyr.service
+After=line-xephyr.service
+PartOf=line-session.service
+# openbox 會用 XRegisterIMInstantiateCallback 在 XIM server 出現時回頭接上。
+# 若 fcitx5 先死,openbox 會卡在 XIM 拆連線的同步等待上,SIGTERM 叫不動它。
+# Before= 同時定義啟動與關閉順序:啟動早於 openbox、關閉晚於 openbox。
+Before=line-window-manager.service
+
+[Service]
+Type=simple
+Environment=DISPLAY=:99
+Environment=XDG_CONFIG_HOME=%h/.local/state/line-bottles/imeconfig
+# 每次啟動用主實例的設定當種子,讓 LINE 的輸入法跟著主設定走。
+# 第二實例結束時會回寫設定(見 ime-setup 記憶),但只落在這個隔離目錄,
+# 汙染不到 ~/.config/fcitx5。路徑一律用 %h 展開,避免依賴變數展開時機。
+ExecStartPre=/bin/sh -c 'mkdir -p %h/.local/state/line-bottles/imeconfig/fcitx5/conf && cp -f %h/.config/fcitx5/config %h/.config/fcitx5/profile %h/.local/state/line-bottles/imeconfig/fcitx5/ 2>/dev/null; cp -f %h/.config/fcitx5/conf/*.conf %h/.local/state/line-bottles/imeconfig/fcitx5/conf/ 2>/dev/null; true'
+# dbus-run-session 給它私有 session bus,不與主實例競爭 org.fcitx.Fcitx5。
+# -D = 前景執行(配合 Type=simple);不用 -k,要它隨 Xephyr 一起結束。
+# 只停用在 :99 沒意義的 addon,保留 dbus 與 classicui 讓候選字視窗畫得出來。
+ExecStart=/usr/bin/dbus-run-session -- /usr/bin/fcitx5 -D --disable=wayland,waylandim,notificationitem,kimpanel,notifications
+Restart=no
