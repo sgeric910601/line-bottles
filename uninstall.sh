@@ -29,10 +29,11 @@ info() { echo "${YEL}→ $*${RST}"; }
 info "停止工作階段…"
 "$BINDIR/line-bottles" --stop >/dev/null 2>&1 || true
 systemctl --user stop line-session.service line-window-manager.service \
-    line-x11-bridge.service line-fcitx5.service line-xephyr.service 2>/dev/null || true
+    line-x11-bridge.service line-fcitx5.service line-clipboard.service \
+    line-xephyr.service 2>/dev/null || true
 
 info "移除服務與啟動器…"
-rm -f "$UNITDIR"/line-{session,xephyr,x11-bridge,window-manager,fcitx5}.service
+rm -f "$UNITDIR"/line-{session,xephyr,x11-bridge,window-manager,fcitx5,clipboard}.service
 systemctl --user daemon-reload
 rm -f "$APPDIR/bottles-Line-LineLauncher.desktop"
 [ -L "$HOME/Desktop/LINE.desktop" ] && rm -f "$HOME/Desktop/LINE.desktop"

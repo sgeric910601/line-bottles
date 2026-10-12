@@ -16,6 +16,7 @@ The price is two layers of isolation, which create three problems that must be s
 |---|---|
 | The Flatpak sandbox cannot see the host's `/tmp/.X11-unix/X99` | `socat` bridges it to TCP `127.0.0.1:6099` |
 | fcitx5 only serves the main display; `:99` has no input method at all | A second, fully isolated fcitx5 instance for `:99` |
+| X11 selections are bound to a single X server, so there is no shared clipboard | A bridge daemon connected to both displays, driven by XFixes |
 | LINE refuses to load Wine's unsigned system DLLs | Sign `system32`/`syswow64` with a locally generated certificate |
 
 That last one is the least documented and the most likely to stop you cold: without it LINE simply will not start.
@@ -51,19 +52,25 @@ See [docs/versions.md](docs/versions.md) for details (documentation is in Tradit
 
 ```
 GNOME desktop (:1)
-└── Xephyr :99                    a 1280x800 nested X server
-    ├── openbox                   window management
-    ├── fcitx5 (own instance)     CJK input, private dbus + isolated config
-    └── Wine / LINE.exe           connects over the socat TCP bridge
+├── Xephyr :99                    a 1280x800 nested X server
+│   ├── openbox                   window management
+│   ├── fcitx5 (own instance)     CJK input, private dbus + isolated config
+│   └── Wine / LINE.exe           connects over the socat TCP bridge
+└── clipboard bridge              the only component attached to both X servers
 ```
 
-Five systemd user units are orchestrated by `line-session.service`. Startup and shutdown order are **not** simply the reverse of each other — the reasoning sits next to `START_ORDER` / `STOP_ORDER` in `lib/session.py` and in [docs/architecture.md](docs/architecture.md).
+Six systemd user units are orchestrated by `line-session.service`. Startup and shutdown order are **not** simply the reverse of each other — the reasoning sits next to `START_ORDER` / `STOP_ORDER` in `lib/session.py` and in [docs/architecture.md](docs/architecture.md).
 
-Everything under `lib/` uses only the Python standard library — no third-party dependencies.
+Everything under `lib/` uses only the Python standard library — no third-party Python
+dependencies. The clipboard bridge shells out to `xclip`, which `install.sh` installs:
+INCR chunking, TARGETS negotiation and image formats are exactly the kind of thing that
+grows silent bugs when hand-rolled.
 
 ## Known limitations
 
-- **No drag and drop.** Xephyr is a separate X server, and X11 drag-and-drop (XDND) relies on client messages within a single X server. Neither direction works. The only real fix would be dropping Xephyr, which brings back the window-management problems it was introduced to solve.
+- **No drag and drop.** Xephyr is a separate X server, and X11 drag-and-drop (XDND) relies on client messages within a single X server. Neither direction works. The only real fix would be dropping Xephyr, which brings back the window-management problems it was introduced to solve. **The clipboard is a different story** — copy and paste works both ways, for text and images; see below.
+- **Pasting into LINE requires focusing the LINE window first.** `line-clipboard.service` bridges the clipboard: anything copied inside LINE syncs out immediately, but the host clipboard is only pushed in **while the LINE window has focus**. That asymmetry is deliberate — hitting copy in a password manager should not put the password somewhere a closed-source Windows program can read it.
+- **Content copied from LINE disappears when LINE is closed.** An X11 selection is held by the owning process; with no owner there is no content, and this machine has no clipboard manager. Paste it somewhere first, or install a clipboard manager.
 - **Rendering is slow.** `LIBGL_ALWAYS_SOFTWARE=true` routes all GL through llvmpipe (CPU software rendering). That is the current ceiling on smoothness.
 - **The file picker only sees `~/Downloads` and `~/Pictures`.** The Flatpak sandbox deliberately exposes nothing else; copy files there before sending them.
 
@@ -78,8 +85,9 @@ The single most useful lesson is there too: `wine-debug.log` ending in `X connec
 | Path | Contents |
 |---|---|
 | `bin/*.in` | Launcher templates; `install.sh` substitutes real paths |
-| `lib/` | `session.py` (orchestration), `x11.py` (ctypes Xlib), `version.py`, `peversion.py` |
-| `systemd/` | Five user units |
+| `lib/` | `session.py` (orchestration), `x11.py` (ctypes Xlib), `clipboard.py`, `version.py`, `peversion.py` |
+| `systemd/` | Six user units |
+| `tests/` | `unittest` coverage for the pure decision logic: clipboard format choice |
 | `bottle/` | Bottle creation, DLL signing, certificate config |
 | `docs/` | Architecture, troubleshooting, version management |
 

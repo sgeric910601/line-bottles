@@ -5,22 +5,29 @@
 ```
 GNOME 桌面 (:1)
 │
-└── Xephyr :99                1280x800,-ac(關閉存取控制)、-noreset
-    │                          在 GNOME 上就是一個標題為 LINE 的普通視窗
-    ├── openbox --sm-disable   視窗管理
-    ├── fcitx5(獨立實例)      DISPLAY=:99、私有 dbus、隔離設定目錄
-    └── Wine / LINE.exe        DISPLAY=127.0.0.1:99(經 socat)
+├── Xephyr :99                1280x800,-ac(關閉存取控制)、-noreset
+│   │                          在 GNOME 上就是一個標題為 LINE 的普通視窗
+│   ├── openbox --sm-disable   視窗管理
+│   ├── fcitx5(獨立實例)      DISPLAY=:99、私有 dbus、隔離設定目錄
+│   └── Wine / LINE.exe        DISPLAY=127.0.0.1:99(經 socat)
+│
+└── 剪貼簿橋接                 唯一同時連著 :1 與 :99 的元件
+        ↕                      XFixes 監聽所有權變動 + xclip 搬運內容
 ```
 
-## 五個 systemd user unit
+除了剪貼簿橋接之外,所有元件都只活在其中一邊。這也是為什麼 `line-clipboard.service`
+是唯一不設 `DISPLAY` 的 unit。
+
+## 六個 systemd user unit
 
 | Unit | 做什麼 | 關鍵設定 |
 |---|---|---|
-| `line-session` | 總控。跑 `session.py --session`,負責相依檢查、依序啟動其餘四個、監控存活、結束時清理 | `ExecStopPost=--cleanup`、`TimeoutStopSec=35` |
+| `line-session` | 總控。跑 `session.py --session`,負責相依檢查、依序啟動其餘五個、監控存活、結束時清理 | `ExecStopPost=--cleanup`、`TimeoutStopSec=35` |
 | `line-xephyr` | 巢狀 X server | `SuccessExitStatus=1`(關視窗時離開碼為 1,不算失敗) |
 | `line-fcitx5` | `:99` 專屬輸入法 | `BindsTo=line-xephyr`、**`Before=line-window-manager`** |
 | `line-window-manager` | openbox | `TimeoutStopSec=5` |
 | `line-x11-bridge` | socat TCP 橋接 | `SuccessExitStatus=143`(SIGTERM) |
+| `line-clipboard` | 主機 ↔ `:99` 的剪貼簿橋接 | **不設 `DISPLAY`**(要同時連兩邊);選用,起不來不影響 LINE |
 
 這些 unit **都沒有被 enable**,也不該 enable —— 它們只由 `line-session` 觸發。原本 `line-xephyr` 與 `line-x11-bridge` 寫了 `WantedBy=default.target`,但從未生效,已移除以免誤導。
 
@@ -47,15 +54,55 @@ LINE 跑在 Flatpak 沙箱裡。Flatpak 的 `--socket=x11` 只會把**主** X se
 
 注音個人詞庫 `~/.chewing/chewing.sqlite3` **兩個實例共用**(sqlite 有檔案鎖,並行寫入安全),所以在 LINE 裡學到的詞會進主詞庫。
 
+## 為什麼剪貼簿要另外橋接
+
+X11 的選取區(selection)是**綁在單一 X server 上**的協定:擁有者是某個視窗,
+要資料的人向那個視窗發 `SelectionRequest`,資料透過同一個 server 的屬性傳遞。
+`:1` 與 `:99` 是兩個獨立的 server,彼此沒有任何共同的視窗,所以 CLIPBOARD 天生不相通。
+
+這跟 socat 那個橋接是**不同層次**的問題。socat 解決的是「LINE 連不到 `:99` 這個 server」;
+剪貼簿要解決的是「`:1` 與 `:99` 是兩個 server」。就算 LINE 直接跑在主機上也不需要 socat,
+但只要有 Xephyr,剪貼簿就一定要橋。
+
+`lib/clipboard.py` 同時開兩個 display 連線:
+
+| 面向 | 做法 |
+|---|---|
+| 變更偵測 | XFixes 的 `XFixesSelectSelectionInput`,兩個 X 連線的 fd 一起 `select()`,不輪詢 |
+| 搬運 | 交給 `xclip`。INCR 分段傳輸、TARGETS 協商、`image/png` 這三件事自己寫最容易出隱性 bug |
+| 格式 | 依序挑 `image/png → image/bmp → image/jpeg → UTF8_STRING → text/plain;charset=utf-8 → STRING`,**原樣轉送不做轉換**(Wine 的 winex11.drv 對圖片不一定給 png) |
+| 迴圈防護 | 記住自己上次裝在每一端的內容雜湊;所有權變動若來自自己就不再彈回去 |
+| 隱私 | 日誌只記位元組數與 target 名稱,**絕不記錄內容** |
+| 生命週期 | `BindsTo=line-xephyr` |
+
+### 方向不對稱是刻意的
+
+**LINE → 主機一律即時。** 從 LINE 複製出來的東西沒有外洩風險。
+
+**主機 → LINE 只在 LINE 視窗取得焦點時才推入。** 若做成全自動,你在密碼管理員按下複製的那一刻,
+密碼就會出現在 LINE 讀得到的 X server 裡 —— 而 LINE 是閉源的 Windows 程式。
+焦點偵測靠監聽 `:1` root 的 `_NET_ACTIVE_WINDOW`,跟 Xephyr 視窗的 id 比對。
+
+代價是你必須先點進 LINE 視窗才貼得到,但那本來就是貼上前的動作。
+
+### Xlib 配 select 的陷阱
+
+主迴圈在 `select()` 之前一定要再檢查一次 `XPending`。Xlib 的任何往返呼叫(例如查
+`_NET_ACTIVE_WINDOW`)都會順手把已經到達的事件讀進**內部佇列**,fd 上就沒有資料了,
+`select()` 於是空等滿一秒才回來。實測這個差別是**剪貼簿延遲 1.5 秒 vs 0.05 秒**。
+
 ## 啟動與關閉順序
 
 兩者不是彼此的反序,各有理由。定義集中在 `lib/session.py` 的 `START_ORDER` / `STOP_ORDER`。
 
-**啟動**:`xephyr → fcitx5 → window-manager → x11-bridge`
+**啟動**:`xephyr → fcitx5 → window-manager → x11-bridge → clipboard`
 
 fcitx5 必須在 openbox 之前。openbox 啟動時會嘗試開啟輸入法,晚了就只會在日誌留下 `Failed to open an Input Method`。
 
-**關閉**:`window-manager → x11-bridge → fcitx5 → xephyr`
+剪貼簿橋接排在最後,因為它只依賴 Xephyr,而且列在 `session.py` 的 `OPTIONAL` 裡 ——
+它起不來只會在日誌留一筆警告,不會讓整個工作階段失敗。LINE 少了剪貼簿照樣能用。
+
+**關閉**:`window-manager → x11-bridge → fcitx5 → clipboard → xephyr`
 
 openbox 必須在 fcitx5 之前結束。openbox 用 `XRegisterIMInstantiateCallback` 註冊回呼,XIM server 晚點出現它也會回頭接上;若 fcitx5 先死,openbox 會卡在 XIM 拆連線的同步等待上,SIGTERM 叫不動,60 秒後才被 SIGKILL —— 期間舊的 Xephyr 一直佔著 `:99`,下一次啟動就會失敗。
 

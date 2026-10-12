@@ -49,17 +49,20 @@ line-version pin              # 鎖定版本(停用 LINE 自動更新)
 
 ```
 GNOME 桌面 (:1)
-└── Xephyr :99                    一台 1280x800 的巢狀 X server
-    ├── openbox                   視窗管理
-    ├── fcitx5(獨立實例)         注音輸入,私有 dbus + 隔離設定
-    └── Wine / LINE.exe           經 socat TCP 橋接連入
+├── Xephyr :99                    一台 1280x800 的巢狀 X server
+│   ├── openbox                   視窗管理
+│   ├── fcitx5(獨立實例)         注音輸入,私有 dbus + 隔離設定
+│   └── Wine / LINE.exe           經 socat TCP 橋接連入
+└── 剪貼簿橋接                    唯一同時連著兩個 X server 的元件
 ```
 
-五個 systemd user unit 由 `line-session.service` 統籌,啟動與關閉順序**不是**彼此的反序 —— 理由寫在 `lib/session.py` 的 `START_ORDER` / `STOP_ORDER` 旁邊,以及 [docs/architecture.md](docs/architecture.md)。
+六個 systemd user unit 由 `line-session.service` 統籌,啟動與關閉順序**不是**彼此的反序 —— 理由寫在 `lib/session.py` 的 `START_ORDER` / `STOP_ORDER` 旁邊,以及 [docs/architecture.md](docs/architecture.md)。
 
 ## 已知限制
 
-- **不能拖放檔案。** Xephyr 是獨立的 X server,而 X11 的拖放(XDND)靠同一個 X server 內的 client message,跨 server 沒有這個機制。拖出、拖入都不行。唯一根治法是拆掉 Xephyr,但那會把當初要解決的視窗管理問題帶回來。
+- **不能拖放檔案。** Xephyr 是獨立的 X server,而 X11 的拖放(XDND)靠同一個 X server 內的 client message,跨 server 沒有這個機制。拖出、拖入都不行。唯一根治法是拆掉 Xephyr,但那會把當初要解決的視窗管理問題帶回來。**剪貼簿不在此列** —— 複製貼上(文字與圖片)兩個方向都可以,見下一則。
+- **要貼進 LINE,得先點一下 LINE 視窗。** 剪貼簿由 `line-clipboard.service` 橋接:從 LINE 複製出來一律即時同步,但主機的剪貼簿**只在 LINE 視窗取得焦點時**才推進去。這是刻意的取捨 —— 你在密碼管理員按下複製時,不該讓密碼立刻出現在一個閉源 Windows 程式讀得到的地方。
+- **關掉 LINE 後,剛從 LINE 複製的內容會消失。** X11 的剪貼簿內容由擁有者行程持有,沒有擁有者就沒有內容,而這台機器沒有剪貼簿管理員。先貼出來再關,或自行安裝剪貼簿管理員。
 - **畫面偏慢。** `LIBGL_ALWAYS_SOFTWARE=true` 讓所有 GL 走 llvmpipe(CPU 軟體渲染)。這是目前流暢度的上限。
 - **檔案選擇器只看得到 `~/Downloads` 與 `~/Pictures`。** Flatpak 沙箱刻意只開這兩個目錄;要傳其他位置的檔案得先複製過去。
 
@@ -72,9 +75,10 @@ GNOME 桌面 (:1)
 | 路徑 | 內容 |
 |---|---|
 | `bin/*.in` | 啟動器範本,`install.sh` 會代入實際路徑 |
-| `lib/` | `session.py`(主控)、`x11.py`(ctypes Xlib)、`version.py`、`peversion.py` |
-| `systemd/` | 5 個 user unit |
+| `lib/` | `session.py`(主控)、`x11.py`(ctypes Xlib)、`clipboard.py`(剪貼簿橋接)、`version.py`、`peversion.py` |
+| `systemd/` | 6 個 user unit |
 | `bottle/` | 建立 bottle、簽署 DLL、憑證設定 |
+| `tests/` | 純邏輯的 `unittest`:剪貼簿格式選擇(`python3 -m unittest discover tests`) |
 | `docs/` | 架構、疑難排解、版本管理 |
 
 `lib/` 下的程式只用 Python 標準函式庫,沒有第三方相依。

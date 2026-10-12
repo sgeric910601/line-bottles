@@ -1,0 +1,14 @@
+[Unit]
+Description=Clipboard bridge between the host display and the LINE nested display
+BindsTo=line-xephyr.service
+After=line-xephyr.service
+PartOf=line-session.service
+
+[Service]
+Type=simple
+# 刻意不設 DISPLAY：這個服務要同時連上主機顯示器與 :99。主機那端從
+# systemd user manager 繼承的 DISPLAY/XAUTHORITY 取得（GNOME 登入時匯入）。
+ExecStart=%h/.local/bin/line-bottles --clipboard
+# Xephyr 收掉時 Xlib 會以 IO error 結束行程，那是正常收場不是故障。
+SuccessExitStatus=1
+Restart=no

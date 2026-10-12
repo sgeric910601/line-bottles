@@ -27,11 +27,17 @@ UNIT = 'line-session.service'
 #  - 關閉時 openbox 要在 fcitx5 之前結束，否則它會卡在 XIM 拆連線的同步等待上
 #    （見 line-fcitx5.service 的 Before=line-window-manager.service）。
 #  - Xephyr 一律最後才停，其餘服務都 BindsTo 它。
+#  - 剪貼簿橋接排在最後啟動：它只依賴 Xephyr，而且是選用的，
+#    不該讓它的就緒等待擋住前面那些真正必要的服務。
 START_ORDER = ('line-xephyr.service', 'line-fcitx5.service',
-               'line-window-manager.service', 'line-x11-bridge.service')
+               'line-window-manager.service', 'line-x11-bridge.service',
+               'line-clipboard.service')
 STOP_ORDER = ('line-window-manager.service', 'line-x11-bridge.service',
-              'line-fcitx5.service', 'line-xephyr.service')
+              'line-fcitx5.service', 'line-clipboard.service',
+              'line-xephyr.service')
 SERVICES = list(STOP_ORDER)
+# 這些服務起不來只記警告：LINE 少了它們照樣能用，不值得讓整個工作階段失敗。
+OPTIONAL = frozenset({'line-clipboard.service'})
 CLI = ['flatpak', 'run', '--command=bottles-cli', 'com.usebottles.bottles']
 WIN_EXE = r'C:\users\steamuser\AppData\Local\LINE\bin\current\LINE.exe'
 STOP = False
@@ -158,7 +164,11 @@ def wait_for(test, seconds):
 
 def start_environment():
     for service in START_ORDER:
+        optional = service in OPTIONAL
         if system('start', service).returncode:
+            if optional:
+                logging.warning('選用服務啟動失敗，略過：%s', service)
+                continue
             raise RuntimeError('無法啟動 ' + service)
         if service == 'line-xephyr.service':
             test = lambda: command(['xdpyinfo', '-display', ':99'], 2).returncode == 0
@@ -167,9 +177,16 @@ def start_environment():
                 ['xprop', '-display', ':99', '-root', 'XIM_SERVERS'], 2).stdout
         elif service == 'line-window-manager.service':
             test = lambda: bool(snapshot().get('wm'))
+        elif service == 'line-clipboard.service':
+            # 橋接接上兩邊之後才會立這個旗標，與 fcitx5 看 XIM_SERVERS 同理。
+            test = lambda: '_LINE_CLIPBOARD_READY(CARDINAL)' in command(
+                ['xprop', '-display', ':99', '-root', '_LINE_CLIPBOARD_READY'], 2).stdout
         else:
             test = lambda: command(['xdpyinfo', '-display', '127.0.0.1:99'], 2).returncode == 0
         if not wait_for(test, 8):
+            if optional:
+                logging.warning('選用服務未就緒，略過：%s', service)
+                continue
             raise RuntimeError('服務未能就緒：' + service)
 
 def responsive(window):
@@ -325,13 +342,18 @@ def launch(action):
 def main():
     os.umask(0o077)
     STATE.mkdir(parents=True, exist_ok=True)
-    handler = RotatingFileHandler(STATE / 'session.log', maxBytes=1024 * 1024,
-                                 backupCount=4, encoding='utf-8')
+    action = sys.argv[1] if len(sys.argv) > 1 else '--launch'
+    # 橋接是獨立的長時間常駐行程，日誌另開一份，免得與工作階段的紀錄交錯難讀。
+    handler = RotatingFileHandler(
+        STATE / ('clipboard.log' if action == '--clipboard' else 'session.log'),
+        maxBytes=1024 * 1024, backupCount=4, encoding='utf-8')
     logging.basicConfig(level=logging.INFO, handlers=[handler],
                         format='%(asctime)s %(message)s')
-    action = sys.argv[1] if len(sys.argv) > 1 else '--launch'
     if action == '--session':
         session()
+    elif action == '--clipboard':
+        import clipboard
+        clipboard.main(sys.argv[2:])
     elif action == '--cleanup':
         cleanup()
     elif action == '--status':

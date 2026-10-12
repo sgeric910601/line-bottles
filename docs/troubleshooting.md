@@ -13,6 +13,11 @@
 | **存檔後找不到檔案** | 檔案存進了 Wine prefix 內的目錄,家目錄看不到 | prefix 內 `users/steamuser/{Downloads,Pictures}` 要是指向 host 的符號連結 |
 | LINE **根本起不來** | Wine 系統 DLL 沒有簽章,被 LINE 拒載 | 執行 `bottle/sign-dlls.sh` |
 | `fcitx5-fix` 報告**實例數 ≠ 1** | 它把 `:99` 的實例也算進去了 | 用 cgroup 排除:`grep -qs line-fcitx5 /proc/<pid>/cgroup` |
+| **貼不進 LINE**,但從 LINE 複製得出來 | 正常行為:主機 → LINE 只在 LINE 視窗有焦點時才推入 | 先點一下 LINE 視窗再按 Ctrl+V |
+| 剪貼簿**完全不通** | `line-clipboard.service` 沒起來,或 `xclip` 沒裝 | `systemctl --user status line-clipboard`;`sudo apt install xclip` |
+| 剪貼簿**只有文字能過,圖片不行** | 來源那端沒有提供任何支援的圖片格式 | 查來源實際提供什麼:見下方「剪貼簿查不通時」 |
+| 剪貼簿**慢一拍**(約一秒) | `select()` 前沒有重新檢查 `XPending` | 見 `docs/architecture.md`「Xlib 配 select 的陷阱」 |
+| 關掉 LINE 後**剛複製的內容不見了** | X11 的選取區由擁有者行程持有,橋接一結束就沒有擁有者 | 不是 bug,見下方「剪貼簿的固有限制」 |
 
 ## 已證實無效,別再重試
 
@@ -37,7 +42,48 @@ Presenter: Actual swapchain properties:
 
 **「decoder 相關錯誤」** —— 無關。日誌裡 22 次 "decoder" 全是 `cryptasn:CryptDecodeObjectEx`,那是 **Authenticode 憑證的 ASN.1 解碼**,與影像解碼無關。
 
+**「Xephyr 應該會自己代理剪貼簿」** —— 不會。Xephyr 只是一個 X server 的實作,
+它不是 X client,不參與任何 selection 協商。`autocutsel` 那類工具也幫不上忙 ——
+它同步的是**同一個 display 內**的 PRIMARY 與 CLIPBOARD,不跨 server。
+
 **「`virtual_desktop` 設定有影響」** —— 沒有生效。`bottle.yml` 裡雖有 `virtual_desktop: true`、`virtual_desktop_res: 1920x1080`,但 Wine 登錄檔中沒有 `Explorer\Desktops` 項目,實際上沒有啟用。
+
+## 剪貼簿查不通時
+
+先確認橋接活著、旗標立著:
+
+```bash
+systemctl --user status line-clipboard.service
+xprop -display :99 -root _LINE_CLIPBOARD_READY      # 應為 CARDINAL = 1
+tail ~/.local/state/line-bottles/clipboard.log      # 只有位元組數與格式,沒有內容
+```
+
+再看兩端各自實際提供什麼格式 —— **這是圖片貼不過去時唯一有用的一條線索**:
+
+```bash
+xclip -display :99 -selection clipboard -t TARGETS -o    # LINE 那端提供什麼
+xclip -display :1  -selection clipboard -t TARGETS -o    # 主機那端提供什麼
+```
+
+橋接只會轉送 `lib/clipboard.py` 的 `PREFERRED` 清單裡有的格式,而且**原樣轉送不做轉換**。
+若 LINE 給的是清單外的格式(例如只有 `CF_DIB` 而沒有任何 `image/*`),那就是沒東西可搬。
+要支援就把那個格式加進 `PREFERRED`,而不是去加轉檔工具。
+
+## 剪貼簿的固有限制
+
+**關掉 LINE 之後,剛從 LINE 複製的內容會從主機剪貼簿消失。** X11 的選取區沒有「存放區」,
+內容由擁有者**行程**持有;橋接一結束就沒有擁有者,剪貼簿就空了。
+
+```bash
+xprop -display :1 -root CLIPBOARD_MANAGER   # 沒有輸出 = 這台機器沒有剪貼簿管理員
+```
+
+裝了剪貼簿管理員(GNOME 擴充、`clipman`、CopyQ 等)的系統會由它接手,內容就留得住。
+沒裝的話:**先貼出來再關 LINE**。這是 X11 的設計,不是橋接的缺陷。
+
+**拖放仍然不行,而且和剪貼簿是兩回事。** 剪貼簿可以橋是因為內容能由第三者代持;
+XDND 則是拖曳過程中在**同一個 X server 內**用 client message 即時協商,
+跨 server 沒有對應的東西可以轉送。
 
 ## 蒐證方法
 
@@ -82,6 +128,18 @@ DISPLAY=:99 xprop -id <視窗id> _NET_WM_STATE
 for p in $(pgrep -x fcitx5); do
     echo "$p: $(grep -qs line-fcitx5 /proc/$p/cgroup && echo 'LINE(:99)' || echo '主實例')"
 done
+
+# 剪貼簿目前的擁有者(0x0 = 沒有人持有,剪貼簿是空的)
+python3 - <<'EOF'
+import ctypes as c
+X = c.CDLL('libX11.so.6')
+X.XOpenDisplay.argtypes = [c.c_char_p]; X.XOpenDisplay.restype = c.c_void_p
+X.XInternAtom.argtypes = [c.c_void_p, c.c_char_p, c.c_int]; X.XInternAtom.restype = c.c_ulong
+X.XGetSelectionOwner.argtypes = [c.c_void_p, c.c_ulong]; X.XGetSelectionOwner.restype = c.c_ulong
+for d in (b':1', b':99'):
+    dpy = X.XOpenDisplay(d)
+    print(d.decode(), hex(X.XGetSelectionOwner(dpy, X.XInternAtom(dpy, b'CLIPBOARD', 0))))
+EOF
 ```
 
 注意 `xprop -id <w> _NET_WM_PID` 回報的是 **Wine 內部的 Windows PID**,不是 Linux PID,拿去 `ps` 查會得到完全無關的行程。
