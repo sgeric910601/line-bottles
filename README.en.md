@@ -87,7 +87,7 @@ The single most useful lesson is there too: `wine-debug.log` ending in `X connec
 | `bin/*.in` | Launcher templates; `install.sh` substitutes real paths |
 | `lib/` | `session.py` (orchestration), `x11.py` (ctypes Xlib), `clipboard.py`, `version.py`, `peversion.py` |
 | `systemd/` | Six user units |
-| `tests/` | `unittest` coverage for the pure decision logic: clipboard format choice |
+| `tests/` | `unittest` coverage for the pure decision logic: clipboard format choice, stale-process cleanup |
 | `bottle/` | Bottle creation, DLL signing, certificate config |
 | `docs/` | Architecture, troubleshooting, version management |
 

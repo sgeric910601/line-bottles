@@ -108,6 +108,23 @@ openbox 必須在 fcitx5 之前結束。openbox 用 `XRegisterIMInstantiateCallb
 
 這個順序由 `line-fcitx5.service` 的 **`Before=line-window-manager.service`** 保證。在 systemd 裡 `Before=` 同時定義啟動與關閉順序(關閉時反向),一行就涵蓋兩個方向。`cleanup()` 的 `systemctl stop A B C D` 是**平行**執行的,沒有這行就沒有順序保證。
 
+## 啟動前的殘留清理
+
+`preflight()` 的最後一步是 `clear_stale()`:掃掉上一輪沒收乾淨的 Wine 行程。
+
+這不是預防性的潔癖 —— 2026-10-08 有一次 LINE 自動更新留下死鎖的 `wineserver`,卡了兩天,
+期間 LINE 完全打不開。同一個 prefix 只能有一個 `wineserver`,殭屍不走,新的 LINE 就全部
+掛在它身上空等。詳見 [troubleshooting.md](troubleshooting.md)「自動更新後整個打不開」。
+
+兩件事必須照著做,否則這段程式反而會製造問題:
+
+**偵測用 `WINEPREFIX` 環境變數,不要比對指令列字串。** `bottle_pids(line_only=False)` 已經
+這樣做了。改成比對路徑字串會抓到「指令列剛好提到這個路徑」的無關行程 —— 實測會連執行
+清理的那個 shell 自己都列進去。
+
+**不要用 `bottles-cli stop` 當清理手段。** 它會卡在同一個殭屍上,每呼叫一次就多留一個卡住
+的行程。只能直接下訊號,而且 SIGTERM 對死鎖的 `wineserver` 無效,一定要能升級到 SIGKILL。
+
 ## 存活偵測
 
 `session()` 的監控迴圈每秒檢查一次,連續 5 秒判定為「使用者關掉了 LINE」才收掉整個工作階段。

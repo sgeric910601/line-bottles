@@ -18,6 +18,8 @@
 | 剪貼簿**只有文字能過,圖片不行** | 來源那端沒有提供任何支援的圖片格式 | 查來源實際提供什麼:見下方「剪貼簿查不通時」 |
 | 剪貼簿**慢一拍**(約一秒) | `select()` 前沒有重新檢查 `XPending` | 見 `docs/architecture.md`「Xlib 配 select 的陷阱」 |
 | 關掉 LINE 後**剛複製的內容不見了** | X11 的選取區由擁有者行程持有,橋接一結束就沒有擁有者 | 不是 bug,見下方「剪貼簿的固有限制」 |
+| **點了沒反應**、Xephyr 裡一個視窗都沒有 | 上一輪留下死鎖的 `wineserver`,新的 LINE 全掛在它身上 | `preflight()` 的 `clear_stale()` 會自動處理;手動做法見下方「自動更新後整個打不開」 |
+| `line-bottles --stop` **也沒用** | `bottles-cli stop` 自己也卡在同一個殭屍上 | 同上 —— 別再試 `--stop`,直接下訊號 |
 
 ## 已證實無效,別再重試
 
@@ -47,6 +49,46 @@ Presenter: Actual swapchain properties:
 它同步的是**同一個 display 內**的 PRIMARY 與 CLIPBOARD,不跨 server。
 
 **「`virtual_desktop` 設定有影響」** —— 沒有生效。`bottle.yml` 裡雖有 `virtual_desktop: true`、`virtual_desktop_res: 1920x1080`,但 Wine 登錄檔中沒有 `Explorer\Desktops` 項目,實際上沒有啟用。
+
+## 自動更新後整個打不開
+
+2026-10-08 實際發生過,值得記下來:LINE 自動更新到 26.5.0.3975 之後留下一個**死鎖的
+`wineserver`,卡了兩天九小時**。症狀是點 LINE 完全沒反應 —— 服務全部 active、Xephyr 開著,
+但裡面一個視窗都沒有。
+
+成因:**同一個 Wine prefix 只能有一個 `wineserver`。** 殭屍沒走,之後每次啟動的 `LINE.exe`
+都連上它然後卡在 `anon_pipe_read`,永遠等不到回應。
+
+最難纏的是 **`line-bottles --stop` 救不了**:它呼叫的 `bottles-cli stop -b Line` 會卡在
+同一個殭屍上,每試一次就多留一個卡住的清理行程(那天累積了六個,各吃 75 MB)。
+**清理工具自己也壞掉了。**
+
+`wineserver -k` 也沒用 —— 新開的 `flatpak run` 是另一個沙箱,`/tmp` 是獨立的 tmpfs,
+找不到原本那組的 socket。
+
+### 現在會自動處理
+
+`preflight()` 的 `clear_stale()` 在每次啟動前會掃一次殘留:SIGTERM → 等 6 秒 → 還在就
+SIGKILL。那個死鎖的 `wineserver` 實測對 SIGTERM 毫無反應,**必須 SIGKILL 才倒**。
+
+包裝用的 `bwrap` / `bottles-cli` 不必另外處理:實測 `wineserver` 一死它們就自己收
+(41 個行程在 SIGTERM 之後只剩 3 個)。
+
+### 手動清(萬一自動清也失效)
+
+```bash
+# 看有哪些行程還掛在這個 prefix 上
+python3 -c "
+import sys; sys.path.insert(0, '$HOME/.local/lib/line-bottles')
+import session
+for p in session.bottle_pids(line_only=False):
+    print(p, open(f'/proc/{p}/cmdline','rb').read().decode('utf-8','replace').replace(chr(0),' '))
+"
+```
+
+**偵測一定要用 `WINEPREFIX` 環境變數比對(`bottle_pids` 就是這樣做的),不要比對指令列字串**
+—— 後者會把「指令列剛好提到這個路徑」的無關行程一起抓進來,包括清理腳本自己。
+這是實測踩到的:一行 `grep` 就把執行它的那個 shell 列進了待殺清單。
 
 ## 剪貼簿查不通時
 

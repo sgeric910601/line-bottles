@@ -108,6 +108,37 @@ def cleanup():
         command(CLI + ['stop', '-b', 'Line'], 15)
     system('stop', *SERVICES, seconds=12)
 
+def clear_stale():
+    """啟動前清掉上一輪留下的 Wine 行程。
+
+    2026-10-08 實際發生過：LINE 自動更新到 26.5.0.3975 之後留下一個死鎖的
+    wineserver，卡了兩天九小時。同一個 prefix 只能有一個 wineserver，之後每次
+    啟動的 LINE 都掛到那個殭屍上等待，Xephyr 裡一個視窗都不會出現。
+
+    不能改用 `bottles-cli stop`：它自己也會卡在同一個殭屍上，每試一次就多留一個
+    卡住的清理行程（那天累積了六個）。唯一有效的是直接下訊號。
+
+    偵測沿用 bottle_pids 的 WINEPREFIX 比對。不要改成比對指令列字串 —— 那會連
+    「指令列剛好提到這個路徑」的無關行程（包括清理腳本自己）一起抓進來。
+    包裝用的 bwrap / bottles-cli 不必另外處理：wineserver 一死它們就會自己收。
+    """
+    stale = bottle_pids(line_only=False)
+    if not stale:
+        return
+    logging.warning('發現 %d 個上一輪殘留的 Wine 行程，清理中', len(stale))
+    for sig, label in ((signal.SIGTERM, '正常結束'), (signal.SIGKILL, '強制結束')):
+        for pid in stale:
+            try:
+                os.kill(pid, sig)
+            except OSError:
+                pass  # 自己先走了，正是我們要的結果
+        if wait_for(lambda: not bottle_pids(line_only=False), 6):
+            logging.info('殘留行程已清除（%s）', label)
+            notify('已清掉上次殘留的程序，正在重新啟動 LINE。')
+            return
+        stale = bottle_pids(line_only=False)
+    raise RuntimeError('有 Wine 程序清不掉，請登出再登入，或重新開機。')
+
 def preflight():
     for executable in ['flatpak', 'systemctl', 'xdpyinfo', 'openbox', 'Xephyr', 'socat']:
         if not shutil.which(executable):
@@ -120,6 +151,8 @@ def preflight():
     runner = re.search(r'^Runner:\s*(.+)$', config, re.M)
     if not runner or not (PREFIX.parent.parent / 'runners' / runner[1].strip()).is_dir():
         raise RuntimeError('找不到 Line 酒瓶使用的 Wine 執行器。')
+    # 擺在最後：先確認環境本身沒問題，再動手清上一輪的殘留。
+    clear_stale()
 
 def prepare_ini():
     path = LINE / 'Data/LINE.ini'
