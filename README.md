@@ -63,6 +63,7 @@ GNOME 桌面 (:1)
 - **不能拖放檔案。** Xephyr 是獨立的 X server,而 X11 的拖放(XDND)靠同一個 X server 內的 client message,跨 server 沒有這個機制。拖出、拖入都不行。唯一根治法是拆掉 Xephyr,但那會把當初要解決的視窗管理問題帶回來。**剪貼簿不在此列** —— 複製貼上(文字與圖片)兩個方向都可以,見下一則。
 - **要貼進 LINE,得先點一下 LINE 視窗。** 剪貼簿由 `line-clipboard.service` 橋接:從 LINE 複製出來一律即時同步,但主機的剪貼簿**只在 LINE 視窗取得焦點時**才推進去。這是刻意的取捨 —— 你在密碼管理員按下複製時,不該讓密碼立刻出現在一個閉源 Windows 程式讀得到的地方。
 - **關掉 LINE 後,剛從 LINE 複製的內容會消失。** X11 的剪貼簿內容由擁有者行程持有,沒有擁有者就沒有內容,而這台機器沒有剪貼簿管理員。先貼出來再關,或自行安裝剪貼簿管理員。
+- **LINE 那端可以主動改寫主機剪貼簿。** 從 LINE 同步出來的方向沒有焦點閘門,而 Windows 程式隨時能自己呼叫 `SetClipboardData` —— 落在主機剪貼簿上的東西,不一定是你按複製放上去的。貼進終端機前先看一眼;要關掉這個方向就停掉 `line-clipboard.service`。詳見 [docs/troubleshooting.md](docs/troubleshooting.md)。
 - **畫面偏慢。** `LIBGL_ALWAYS_SOFTWARE=true` 讓所有 GL 走 llvmpipe(CPU 軟體渲染)。這是目前流暢度的上限。
 - **檔案選擇器只看得到 `~/Downloads` 與 `~/Pictures`。** Flatpak 沙箱刻意只開這兩個目錄;要傳其他位置的檔案得先複製過去。
 
