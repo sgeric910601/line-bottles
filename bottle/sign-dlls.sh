@@ -48,7 +48,12 @@ signed=0; skipped=0; failed=0
 for directory in "$WINDOWS/system32" "$WINDOWS/syswow64"; do
     [ -d "$directory" ] || continue
     while IFS= read -r -d '' dll; do
-        if ! osslsigncode verify -in "$dll" 2>&1 | grep -q "No signature found"; then
+        # osslsigncode verify 的離開碼完全不能拿來判斷：沒有簽章回傳非 0，
+        # 帶著自簽憑證（不被系統信任）也回傳非 0。而在 pipefail 下整條管線會跟著
+        # 它失敗，於是 `if ! …` 恆成立，每個檔案都被當成已簽章跳過 —— 腳本等於
+        # 什麼都沒做（實測：新簽 0／已有簽章 1257）。只認輸出文字，並用 || true 擋 set -e。
+        report="$(osslsigncode verify -in "$dll" 2>&1 || true)"
+        if [[ "$report" != *"No signature found"* ]]; then
             skipped=$((skipped + 1)); continue
         fi
         if osslsigncode sign -h sha256 -certs "$CRT" -key "$KEY" \

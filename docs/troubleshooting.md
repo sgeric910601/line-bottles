@@ -12,6 +12,7 @@
 | 關閉後**下次啟動失敗** | openbox 卡在 XIM 拆連線,60 秒後才被 SIGKILL,舊 Xephyr 佔著 `:99` | `line-fcitx5.service` 需有 `Before=line-window-manager.service` |
 | **存檔後找不到檔案** | 檔案存進了 Wine prefix 內的目錄,家目錄看不到 | prefix 內 `users/steamuser/{Downloads,Pictures}` 要是指向 host 的符號連結 |
 | LINE **根本起不來** | Wine 系統 DLL 沒有簽章,被 LINE 拒載 | 執行 `bottle/sign-dlls.sh` |
+| LINE 跳 **Security verification failed**,指名某個 `.dll` | 那個 DLL 沒有簽章,多半是簽署之後才進到 prefix 的元件(DXVK 等) | 重跑 `bottle/sign-dlls.sh` 再重啟 LINE;見下方「某個 DLL 沒有簽章」 |
 | `fcitx5-fix` 報告**實例數 ≠ 1** | 它把 `:99` 的實例也算進去了 | 用 cgroup 排除:`grep -qs line-fcitx5 /proc/<pid>/cgroup` |
 | **貼不進 LINE**,但從 LINE 複製得出來 | 正常行為:主機 → LINE 只在 LINE 視窗有焦點時才推入 | 先點一下 LINE 視窗再按 Ctrl+V |
 | 剪貼簿**完全不通** | `line-clipboard.service` 沒起來,或 `xclip` 沒裝 | `systemctl --user status line-clipboard`;`sudo apt install xclip` |
@@ -89,6 +90,57 @@ for p in session.bottle_pids(line_only=False):
 **偵測一定要用 `WINEPREFIX` 環境變數比對(`bottle_pids` 就是這樣做的),不要比對指令列字串**
 —— 後者會把「指令列剛好提到這個路徑」的無關行程一起抓進來,包括清理腳本自己。
 這是實測踩到的:一行 `grep` 就把執行它的那個 shell 列進了待殺清單。
+
+## Security verification failed:某個 DLL 沒有簽章
+
+2026-10-12 實際發生過:登入後主視窗一出來就跳出
+
+```
+Security verification failed.
+File : C:\windows\system32\dxgi.dll
+Reason : NO_SIGNATURE
+```
+
+成因:**DXVK 是建立 bottle 之後才裝進去的**(`bottle.yml` 裡 `dxvk: true`、`dxvk-3.1`),
+而簽署是 `create-bottle.sh` 在安裝 LINE 之前跑的。晚到的那 10 個 DLL
+(`d3d8`、`d3d9`、`d3d10core`、`d3d11`、`dxgi`,system32 與 syswow64 各一份)
+從來沒被簽到。LINE 載入哪個就檢查哪個,所以一路到主視窗要用 D3D 才爆出來。
+
+**任何在簽署之後才進到 prefix 的東西都會有同樣的問題** —— DXVK、vkd3d、換 runner、
+winetricks 裝的元件都算。裝完就重跑一次,腳本只簽還沒簽章的,可以重複執行:
+
+```bash
+bottle/sign-dlls.sh
+line-bottles --stop && line-bottles      # 要重啟 LINE 才會重新載入
+```
+
+列出目前還沒簽章的 DLL:
+
+```bash
+B=~/.var/app/com.usebottles.bottles/data/bottles/bottles/Line/drive_c/windows
+for d in system32 syswow64; do
+    for f in "$B/$d"/*.dll; do
+        osslsigncode verify -in "$f" 2>&1 | grep -q "No signature found" \
+            && echo "$d/$(basename "$f")"
+    done
+done
+```
+
+### 腳本自己曾經完全沒作用
+
+從初版到 2026-10-12 為止,`sign-dlls.sh` **一個檔案都沒簽過**。原本的判斷式是
+
+```bash
+if ! osslsigncode verify -in "$dll" 2>&1 | grep -q "No signature found"; then
+```
+
+`osslsigncode verify` 對「沒有簽章」和「帶著不被系統信任的自簽憑證」都回傳非 0,
+而腳本開頭的 `set -euo pipefail` 會讓整條管線跟著它失敗 —— 於是 `if !` 恆為真,
+每個檔案都被算進「已有簽章」跳過。輸出看起來還很正常:`新簽 0／已有簽章 1257`。
+現在改成只認輸出文字,並用 `|| true` 擋掉 `set -e`。
+
+那 1257 個本來就有簽章的 DLL,是收攏成專案之前用舊的臨時腳本簽的 —— 這也是為什麼
+這個 bug 一直沒被發現:LINE 能開,就沒人回頭檢查腳本到底有沒有做事。
 
 ## 剪貼簿查不通時
 
