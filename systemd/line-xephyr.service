@@ -1,11 +1,14 @@
 [Unit]
-Description=Nested X server for LINE in Bottles
+Description=Nested X server for LINE in Bottles, embedded in its frame window
 PartOf=line-session.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/Xephyr :99 -screen 1280x800 -resizeable -ac -br -noreset -title LINE
+# 主程序是外框（lib/frame.py），Xephyr 是它的子行程，以 -parent 嵌在外框裡；
+# 標題列的關閉因此變成最小化。見 docs/architecture.md「外框視窗」。
+# 刻意不設 DISPLAY：外框開在主機顯示器上，從 systemd user manager 繼承。
+ExecStart=%h/.local/bin/line-bottles --frame
+# 登出時主機顯示器消失，外框與 Xephyr 都以 1 結束，那是正常收場不是故障。
 SuccessExitStatus=1
 Restart=no
 RestartSec=1
-

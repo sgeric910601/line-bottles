@@ -235,25 +235,24 @@ def responsive(window):
 
 def focus(window):
     xprobe('focus', window['id'])
-    # Bring the outer GNOME window forward too; only target Xephyr titled LINE.
-    r = command(['xwininfo', '-root', '-tree'], 3)
-    m = re.search(r'(0x[0-9a-f]+) "LINE": \("Xephyr" "Xephyr"\)', r.stdout)
-    if m:
-        xprobe('focus', int(m[1], 16), display=os.environ.get('DISPLAY', ':0'))
+    # 主機上的外框也拉到前面（最小化時會還原）；外框拿到焦點後自己轉給 Xephyr。
+    xprobe('focus-frame', display=os.environ.get('DISPLAY', ':0'))
 
-MAXIMIZED = set()
+MAXIMIZED = {}   # 主視窗 id → 上次放大時 :99 的畫面大小
+_NEVER = object()  # 還沒放大過；不能用 None，畫面大小未知時 screen 也是 None
 
-def fill_screen(windows):
-    """把還沒處理過的主視窗放大到填滿 Xephyr。
+def fill_screen(windows, screen=None):
+    """把主視窗放大到填滿 Xephyr。
 
     LINE 會先開一個載入視窗、稍後才建立真正的主視窗，兩者 id 不同。
     只在就緒當下放大會打到前者，真正的主視窗永遠不會被放大。
-    因此每個主視窗各處理一次即可；已處理過的不再碰，使用者之後
-    自己調整的大小得以保留。
+    因此每個主視窗在同一個畫面大小下只處理一次，使用者自己調整的大小得以保留。
+    外框改變大小時 :99 的畫面跟著變，這時要再放大一次：LINE 若不在放大狀態，
+    就算 Wine 知道螢幕變了（frame.py 會通知）也會停在舊大小。
     """
     for w in windows:
-        if w.get('main') and not w.get('iconic') and w['id'] not in MAXIMIZED:
-            MAXIMIZED.add(w['id'])
+        if w.get('main') and not w.get('iconic') and MAXIMIZED.get(w['id'], _NEVER) != screen:
+            MAXIMIZED[w['id']] = screen
             xprobe('maximize', w['id'])
 
 def session():
@@ -284,11 +283,13 @@ def session():
             started = time.monotonic()
             window = None
             while not STOP and time.monotonic() - started < 60:
-                # Closing the outer window is an explicit end, not a retry trigger.
+                # 外框的關閉已改成最小化；Xephyr 還是結束了，代表當掉、被強制結束
+                # 或登出，都不是重試能救的。
                 if not active('line-xephyr.service'):
                     set_status('closed')
                     return
-                window = main_window(snapshot())
+                s = snapshot()
+                window = main_window(s)
                 if window and responsive(window):
                     break
                 window = None
@@ -296,7 +297,7 @@ def session():
             if STOP:
                 return
             if window:
-                fill_screen([window])
+                fill_screen([window], s.get('screen'))
                 focus(window)
                 set_status('ready')
                 break
@@ -316,7 +317,7 @@ def session():
                 # Iconic/minimized windows and LINE loading windows keep the session alive.
                 missing_since = None
                 # 真正的主視窗可能在載入視窗之後才出現，在這裡補放大。
-                fill_screen(s.get('windows', []))
+                fill_screen(s.get('windows', []), s.get('screen'))
             else:
                 missing_since = missing_since or time.monotonic()
                 if time.monotonic() - missing_since >= 5:
@@ -376,10 +377,11 @@ def main():
     os.umask(0o077)
     STATE.mkdir(parents=True, exist_ok=True)
     action = sys.argv[1] if len(sys.argv) > 1 else '--launch'
-    # 橋接是獨立的長時間常駐行程，日誌另開一份，免得與工作階段的紀錄交錯難讀。
-    handler = RotatingFileHandler(
-        STATE / ('clipboard.log' if action == '--clipboard' else 'session.log'),
-        maxBytes=1024 * 1024, backupCount=4, encoding='utf-8')
+    # 橋接與外框是獨立的長時間常駐行程，日誌各開一份，免得與工作階段的紀錄交錯難讀。
+    log_name = {'--clipboard': 'clipboard.log', '--frame': 'frame.log'}.get(action,
+                                                                           'session.log')
+    handler = RotatingFileHandler(STATE / log_name, maxBytes=1024 * 1024, backupCount=4,
+                                  encoding='utf-8')
     logging.basicConfig(level=logging.INFO, handlers=[handler],
                         format='%(asctime)s %(message)s')
     if action == '--session':
@@ -387,6 +389,9 @@ def main():
     elif action == '--clipboard':
         import clipboard
         clipboard.main(sys.argv[2:])
+    elif action == '--frame':
+        import frame
+        frame.main(sys.argv[2:])
     elif action == '--cleanup':
         cleanup()
     elif action == '--status':

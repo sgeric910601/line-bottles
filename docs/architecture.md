@@ -5,25 +5,26 @@
 ```
 GNOME 桌面 (:1)
 │
-├── Xephyr :99                1280x800,-ac(關閉存取控制)、-noreset
-│   │                          在 GNOME 上就是一個標題為 LINE 的普通視窗
-│   ├── openbox --sm-disable   視窗管理
-│   ├── fcitx5(獨立實例)      DISPLAY=:99、私有 dbus、隔離設定目錄
-│   └── Wine / LINE.exe        DISPLAY=127.0.0.1:99(經 socat)
+├── 外框視窗(frame.py)        在 GNOME 上是標題為 LINE 的普通視窗;關閉 = 最小化
+│   └── Xephyr :99             以 -parent 嵌在外框裡,目前固定 1280x800;-ac、-noreset
+│       ├── openbox --sm-disable   視窗管理
+│       ├── fcitx5(獨立實例)      DISPLAY=:99、私有 dbus、隔離設定目錄
+│       └── Wine / LINE.exe        DISPLAY=127.0.0.1:99(經 socat)
 │
 └── 剪貼簿橋接                 唯一同時連著 :1 與 :99 的元件
         ↕                      XFixes 監聽所有權變動 + xclip 搬運內容
 ```
 
-除了剪貼簿橋接之外,所有元件都只活在其中一邊。這也是為什麼 `line-clipboard.service`
-是唯一不設 `DISPLAY` 的 unit。
+除了剪貼簿橋接之外,所有元件都只當其中一邊的用戶端(外框與 Xephyr 是 `:1` 的用戶端,
+Xephyr 同時是 `:99` 本身)。`line-clipboard` 與 `line-xephyr` 都不設 `DISPLAY`,
+主機那端從 systemd user manager 繼承(GNOME 登入時匯入)。
 
 ## 六個 systemd user unit
 
 | Unit | 做什麼 | 關鍵設定 |
 |---|---|---|
 | `line-session` | 總控。跑 `session.py --session`,負責相依檢查、依序啟動其餘五個、監控存活、結束時清理 | `ExecStopPost=--cleanup`、`TimeoutStopSec=35` |
-| `line-xephyr` | 巢狀 X server | `SuccessExitStatus=1`(關視窗時離開碼為 1,不算失敗) |
+| `line-xephyr` | 外框視窗 + 巢狀 X server。主程序是 `frame.py`,Xephyr 是它的子行程 | `SuccessExitStatus=1`(登出時兩者都以 1 結束,不算失敗);不設 `DISPLAY` |
 | `line-fcitx5` | `:99` 專屬輸入法 | `BindsTo=line-xephyr`、**`Before=line-window-manager`** |
 | `line-window-manager` | openbox | `TimeoutStopSec=5` |
 | `line-x11-bridge` | socat TCP 橋接 | `SuccessExitStatus=143`(SIGTERM) |
@@ -54,6 +55,50 @@ LINE 跑在 Flatpak 沙箱裡。Flatpak 的 `--socket=x11` 只會把**主** X se
 
 注音個人詞庫 `~/.chewing/chewing.sqlite3` **兩個實例共用**(sqlite 有檔案鎖,並行寫入安全),所以在 LINE 裡學到的詞會進主詞庫。
 
+## 外框視窗:為什麼標題列的 X 是最小化
+
+Xephyr 不處理 `WM_DELETE_WINDOW`,也沒在 `WM_PROTOCOLS` 宣告它。按標題列的 X 時 mutter 只能
+`XKillClient`,Xephyr 的連線一斷就 `exit(1)`,整組服務跟著停 —— 2026-10-20 一天內就這樣誤關了四次。
+Xephyr 沒有任何選項能改變這件事。
+
+`lib/frame.py` 在主機上自己建一個頂層視窗,用 `Xephyr -parent <外框>` 把畫面嵌進去,自己宣告並
+接下 `WM_DELETE_WINDOW`,收到就 `XIconifyWindow`。嵌入後有幾件事 Xephyr 不會自己做,由外框補上:
+
+| 面向 | 做法 |
+|---|---|
+| 鍵盤焦點 | `WM_HINTS` input=True + `WM_TAKE_FOCUS`。收到 `WM_TAKE_FOCUS` 就用 WM 給的時間戳把焦點交給 Xephyr 的子視窗;外框被直接設成焦點(`x11.py focus`)時、子視窗剛映射時也轉。焦點若停在外框,指標不在畫面上時鍵盤事件會送到外框,Xephyr 收不到 |
+| 大小 | **目前固定 1280x800**(`WM_NORMAL_HINTS` 最小=最大,不給拖、不給最大化),原因見下方「改大小的限制」。同步機制仍保留:外框的 `ConfigureNotify` 停 0.2 秒沒再變,才 `XResizeWindow` 子視窗,Xephyr 收到後自己做 RandR;再等 Xephyr 調好,用 `XRRGetScreenResources` 讓 `:99` 補發 CRTC／輸出變更通知給 Wine |
+| 啟動順序 | 先設好 `WM_CLASS` 等屬性再映射,等到 `MapNotify` 再 `XSync`,才啟動 Xephyr。少了同步,Xephyr 偶爾查不到外框、以 1 結束,而 1 被當成正常 |
+| 生命週期 | 外框是主程序、Xephyr 是子行程(另設 `PR_SET_PDEATHSIG`)。SIGTERM → 收掉 Xephyr(3 秒後強制)→ 外框以 0 結束;Xephyr 自己結束 → 外框以同樣的結束碼或訊號結束 |
+
+其他決定:
+
+- **`-no-host-grab`**:Xephyr 預設在放開 Ctrl+Shift 時抓住鍵盤與滑鼠,嵌入後沒有標題可以提示,
+  Alt+Tab 會莫名失效。`-title` 也拿掉了,它會在抓取時把字寫到子視窗上。
+- **不宣告 `_NET_WM_PING`**:mutter 送出關閉後會檢查程式是否還活著。
+- **`WM_CLASS` instance 是 `line-bottles`**(`x11.FRAME_CLASS`),`.desktop` 的 `StartupWMClass` 靠它
+  對上 Dock 圖示;剪貼簿的焦點閘門與 `session.focus()` 都用 `x11.find_frame()` 找它。
+- **真正結束 LINE**:Dock 圖示右鍵「結束 LINE」(`line-bottles --stop`),或在 LINE 裡登出。
+  Alt+F4、概覽畫面的關閉、Dock 的「關閉視窗」都會送 `WM_DELETE_WINDOW`,所以也都變成最小化。
+
+### 改大小的限制(2026-10-20,未解決)
+
+外框原本可以拖曳,但 LINE 沒辦法可靠地跟著變:
+
+1. Xephyr 改大小只發 `RRScreenChangeNotify`;Wine 11.0 只聽 CRTC／輸出變更
+   (`xrandr14_device_change_handler`),一直以為螢幕還是舊大小。已解:外框調整後
+   用 `XRRGetScreenResources` 讓 `:99` 補發這兩種通知(`frame.py` 的 `announce()`)。
+2. LINE 放大後大小等於螢幕,Wine 會把它標成 `_NET_WM_STATE_FULLSCREEN`。螢幕改變之後,
+   Wine 對這種視窗會用舊解析度渲染再等比拉伸、置中(上下黑條,文字變糊);取消全螢幕後
+   LINE 能用實際大小重排,但高度被卡在一個不對的值(實測 969,螢幕是 1219)。**未解**。
+
+研究出解法之前外框固定大小;`session.fill_screen()` 在 `:99` 畫面改變時重新放大、
+`frame.py` 的大小同步與 `announce()` 都保留,之後研究直接沿用。
+
+和正式的 LINE 並存的測試外框:`DISPLAY=:1 line-bottles --frame :98 line-bottles-test`,
+標題會是 `LINE (line-bottles-test)`。測鍵盤時要注意它是黑畫面,看不到打的字,用
+`DISPLAY=:98 xinput test-xi2 --root` 看按鍵有沒有進去。
+
 ## 為什麼剪貼簿要另外橋接
 
 X11 的選取區(selection)是**綁在單一 X server 上**的協定:擁有者是某個視窗,
@@ -82,7 +127,7 @@ X11 的選取區(selection)是**綁在單一 X server 上**的協定:擁有者�
 
 **主機 → LINE 只在 LINE 視窗取得焦點時才推入。** 若做成全自動,你在密碼管理員按下複製的那一刻,
 密碼就會出現在 LINE 讀得到的 X server 裡 —— 而 LINE 是閉源的 Windows 程式。
-焦點偵測靠監聽 `:1` root 的 `_NET_ACTIVE_WINDOW`,跟 Xephyr 視窗的 id 比對。
+焦點偵測靠監聽 `:1` root 的 `_NET_ACTIVE_WINDOW`,跟外框視窗(`x11.find_frame()`)的 id 比對。
 
 代價是你必須先點進 LINE 視窗才貼得到,但那本來就是貼上前的動作。
 

@@ -14,7 +14,7 @@ APPDIR="$HOME/.local/share/applications"
 ICONDIR="$HOME/.local/share/icons/hicolor/256x256/apps"
 STATEDIR="$HOME/.local/state/line-bottles"
 BOTTLE="$HOME/.var/app/com.usebottles.bottles/data/bottles/bottles/Line"
-APT_PACKAGES=(xserver-xephyr openbox socat x11-utils zenity osslsigncode xclip)
+APT_PACKAGES=(xserver-xephyr openbox socat x11-utils zenity osslsigncode xclip libxrandr2)
 
 DRY=0; SHELL_ONLY=0
 for argument in "$@"; do
@@ -158,7 +158,7 @@ fi
 step "6. 外殼層（腳本、服務、啟動器）"
 run mkdir -p "$BINDIR" "$LIBDIR" "$UNITDIR" "$APPDIR" "$STATEDIR"
 
-for module in session.py x11.py version.py peversion.py clipboard.py; do
+for module in session.py x11.py version.py peversion.py clipboard.py frame.py; do
     run install -m 644 "$REPO/lib/$module" "$LIBDIR/$module"
 done
 ok "lib → $LIBDIR"

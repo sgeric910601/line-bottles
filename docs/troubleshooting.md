@@ -7,6 +7,9 @@
 | 圖片點開是**全黑視窗** | `QSG_RHI_BACKEND=d3d11` 與 `QT_QUICK_BACKEND=software` 互相矛盾 | 設 `QSG_RHI_BACKEND=opengl`,且**不要**設 `QT_QUICK_BACKEND` |
 | 圖片點開**完全沒反應**、連視窗都沒有 | 只移除了 `QT_QUICK_BACKEND` 卻留著 d3d11 → 連 swapchain 都不建 | 同上,改用 `opengl` |
 | 看圖看到一半**整個 LINE 關掉** | 存活偵測只看標題為 `"LINE"` 的視窗,檢視器標題是寄件者名稱 | `session.py` 判定條件改為 `s.get('windows') or bottle_pids()` |
+| LINE 視窗**不能拖曳改大小**、沒有最大化鈕 | 刻意的:改大小後 Wine 會把 LINE 拉伸變糊,研究出解法前先固定 1280x800 | 見 `docs/architecture.md`「改大小的限制」 |
+| LINE **一開就關**,`frame.log` 有「視為啟動失敗」 | Xephyr 起不來(`:99` 被佔用、查不到外框),外框以 3 結束 | 看 `~/.local/state/line-bottles/frame.log` 與 `journalctl --user -u line-xephyr`;舊行程佔著 `:99` 就先 `line-bottles --stop` |
+| 按標題列的 **X 不會關閉** LINE,只會縮下去 | 刻意的:外框把關閉改成最小化(Xephyr 自己處理不了關閉) | 要結束就在 Dock 圖示按右鍵「結束 LINE」,或在 LINE 裡登出;見 `docs/architecture.md`「外框視窗」 |
 | LINE 視窗**沒有滿版** | maximize 打在 8 秒後就消失的載入視窗上 | `fill_screen()` 在監控迴圈裡對每個新主視窗各做一次 |
 | LINE 裡**打不出中文** | `:99` 上沒有 XIM server | 啟動 `line-fcitx5.service`;驗證:`DISPLAY=:99 xprop -root XIM_SERVERS` 應含 `@server=fcitx` |
 | 關閉後**下次啟動失敗** | openbox 卡在 XIM 拆連線,60 秒後才被 SIGKILL,舊 Xephyr 佔著 `:99` | `line-fcitx5.service` 需有 `Before=line-window-manager.service` |

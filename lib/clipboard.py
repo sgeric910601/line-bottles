@@ -52,10 +52,7 @@ XF.XFixesQueryExtension.argtypes = [D, c.POINTER(I), c.POINTER(I)]
 XF.XFixesQueryExtension.restype = I
 XF.XFixesSelectSelectionInput.argtypes = [D, U, U, c.c_ulong]
 
-x11.declare('XConnectionNumber', [D])
-x11.declare('XChangeProperty', [D, U, U, U, I, I, c.c_void_p, I])
 x11.declare('XDeleteProperty', [D, U, U])
-x11.declare('XQueryTree', [D, U, c.POINTER(U), c.POINTER(U), c.POINTER(D), c.POINTER(c.c_uint)])
 x11.declare('XListProperties', [D, U, c.POINTER(I)], D)
 x11.declare('XGetSelectionOwner', [D, U], U)
 
@@ -276,7 +273,7 @@ class Bridge:
         # 主機這端還要知道哪個視窗在前景，才判斷得出焦點是否在 LINE 上。
         X.XSelectInput(self.hd, self.host_root, PROPERTY_CHANGE_MASK)
         X.XFlush(self.hd)
-        self.xephyr = 0
+        self.frame = 0
         self.focused = False
         # 我們自己裝在各端的內容雜湊，用來擋掉自己造成的所有權變動。
         self.installed = {host: None, line: None}
@@ -312,26 +309,13 @@ class Bridge:
             X.XDeleteProperty(self.ld, self.line_root, name)
         X.XFlush(self.ld)
 
-    def find_xephyr(self):
-        """在主機顯示器上找出 LINE 的那個 Xephyr 視窗。
-
-        Xephyr 以 -title LINE 啟動，同時比對 WM_CLASS 與標題，
-        避免誤判其他同時開著的 Xephyr。
-        """
-        for w in prop(self.hd, self.host_root, '_NET_CLIENT_LIST') or []:
-            if b'Xephyr' not in (prop(self.hd, w, 'WM_CLASS') or b''):
-                continue
-            name = prop(self.hd, w, '_NET_WM_NAME') or prop(self.hd, w, 'WM_NAME') or b''
-            if name.decode('utf-8', 'replace').strip('\0') == 'LINE':
-                return w
-        return 0
-
     def refresh_focus(self):
-        # Xephyr 視窗可能比這支程式晚一點才映射上去，沒找到就下次再找。
-        if not self.xephyr:
-            self.xephyr = self.find_xephyr()
+        # 主機上作用中的視窗是 LINE 的外框（frame.py），焦點閘門就比對它。
+        # 外框可能比這支程式晚一點才映射上去，沒找到就下次再找。
+        if not self.frame:
+            self.frame = x11.find_frame(self.hd, self.host_root)
         active = (prop(self.hd, self.host_root, '_NET_ACTIVE_WINDOW') or [0])[0]
-        focused = bool(self.xephyr) and active == self.xephyr
+        focused = bool(self.frame) and active == self.frame
         gained, self.focused = focused and not self.focused, focused
         if gained:
             # 切進 LINE 的當下才把主機剪貼簿送進去：在別處複製的東西

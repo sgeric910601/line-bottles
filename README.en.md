@@ -36,7 +36,7 @@ If a bottle already exists the installer skips creating one and only installs th
 
 ```bash
 line-bottles                  # start (same as the desktop entry)
-line-bottles --stop           # stop LINE and any leftover black windows
+line-bottles --stop           # quit LINE (same as "結束 LINE" in the dock icon's menu)
 line-bottles --recover        # force-restart the whole environment
 line-bottles --status         # JSON status
 
@@ -52,10 +52,11 @@ See [docs/versions.md](docs/versions.md) for details (documentation is in Tradit
 
 ```
 GNOME desktop (:1)
-├── Xephyr :99                    a 1280x800 nested X server
-│   ├── openbox                   window management
-│   ├── fcitx5 (own instance)     CJK input, private dbus + isolated config
-│   └── Wine / LINE.exe           connects over the socat TCP bridge
+├── frame window                  the title-bar X minimizes instead of quitting
+│   └── Xephyr :99                nested X server embedded in the frame, fixed at 1280x800
+│       ├── openbox               window management
+│       ├── fcitx5 (own instance) CJK input, private dbus + isolated config
+│       └── Wine / LINE.exe       connects over the socat TCP bridge
 └── clipboard bridge              the only component attached to both X servers
 ```
 

@@ -33,7 +33,7 @@ bottle 已經存在時會自動跳過建立,只安裝外殼層。要從零開始
 
 ```bash
 line-bottles                  # 啟動(等同點選單裡的 LINE)
-line-bottles --stop           # 關閉 LINE 與殘留的黑視窗
+line-bottles --stop           # 結束 LINE(Dock 圖示右鍵「結束 LINE」也是這個)
 line-bottles --recover        # 卡住時強制重啟整套環境
 line-bottles --status         # 輸出 JSON 狀態
 
@@ -49,10 +49,11 @@ line-version pin              # 鎖定版本(停用 LINE 自動更新)
 
 ```
 GNOME 桌面 (:1)
-├── Xephyr :99                    一台 1280x800 的巢狀 X server
-│   ├── openbox                   視窗管理
-│   ├── fcitx5(獨立實例)         注音輸入,私有 dbus + 隔離設定
-│   └── Wine / LINE.exe           經 socat TCP 橋接連入
+├── 外框視窗                      標題列的 X 是最小化,不是結束
+│   └── Xephyr :99                嵌在外框裡的巢狀 X server,固定 1280x800
+│       ├── openbox               視窗管理
+│       ├── fcitx5(獨立實例)     注音輸入,私有 dbus + 隔離設定
+│       └── Wine / LINE.exe       經 socat TCP 橋接連入
 └── 剪貼簿橋接                    唯一同時連著兩個 X server 的元件
 ```
 

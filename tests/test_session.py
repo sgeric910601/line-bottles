@@ -60,5 +60,40 @@ class ClearStale(unittest.TestCase):
             session.clear_stale()  # 不應該往外丟例外
 
 
+
+class FillScreen(unittest.TestCase):
+    """外框改大小時 :99 跟著變，LINE 若不在放大狀態就停在舊大小，要再放大一次。"""
+
+    def setUp(self):
+        patcher = mock.patch.object(session, 'xprobe')
+        self.xprobe = patcher.start()
+        self.addCleanup(patcher.stop)
+        session.MAXIMIZED.clear()
+
+    def main(self, wid=1, **extra):
+        return {**dict(id=wid, main=True, iconic=False), **extra}
+
+    def test_new_main_window_is_maximized_once(self):
+        session.fill_screen([self.main()], [1280, 800])
+        session.fill_screen([self.main()], [1280, 800])
+        self.xprobe.assert_called_once_with('maximize', 1)
+
+    def test_maximizes_again_when_screen_size_changes(self):
+        session.fill_screen([self.main()], [1280, 800])
+        session.fill_screen([self.main()], [1600, 979])
+        self.assertEqual(self.xprobe.call_count, 2)
+
+    def test_skips_small_and_minimized_windows(self):
+        session.fill_screen([dict(id=2, main=False, iconic=False),
+                             self.main(3, iconic=True)], [1280, 800])
+        self.xprobe.assert_not_called()
+
+    def test_unknown_screen_size_still_maximizes_once(self):
+        # 偵測結果缺了畫面大小（screen 是 None）時，新視窗仍要放大一次。
+        session.fill_screen([self.main()], None)
+        session.fill_screen([self.main()], None)
+        self.xprobe.assert_called_once_with('maximize', 1)
+
+
 if __name__ == '__main__':
     unittest.main()

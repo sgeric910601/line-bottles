@@ -31,6 +31,18 @@ declare('XSync', [D, I])
 declare('XSelectInput', [D, U, c.c_long])
 declare('XPending', [D])
 declare('XCloseDisplay', [D])
+declare('XConnectionNumber', [D])
+declare('XChangeProperty', [D, U, U, U, I, I, c.c_void_p, I])
+declare('XQueryTree', [D, U, c.POINTER(U), c.POINTER(U), c.POINTER(D), c.POINTER(c.c_uint)])
+declare('XDefaultScreen', [D])
+declare('XDisplayWidth', [D, I])
+declare('XDisplayHeight', [D, I])
+declare('XBlackPixel', [D, I], U)
+declare('XCreateSimpleWindow', [D, U, I, I, c.c_uint, c.c_uint, c.c_uint, U, U], U)
+declare('XMapWindow', [D, U])
+declare('XIconifyWindow', [D, U, I])
+declare('XResizeWindow', [D, U, c.c_uint, c.c_uint])
+declare('XDestroyWindow', [D, U])
 ERROR = c.CFUNCTYPE(I, D, D)
 error_handler = ERROR(lambda display, event: 0)
 X.XSetErrorHandler.argtypes = [ERROR]
@@ -43,8 +55,32 @@ class Client(c.Structure):
     _fields_ = [('type', I), ('serial', U), ('send_event', I), ('display', D),
         ('window', U), ('message_type', U), ('format', I), ('data', Data)]
 
+class Configure(c.Structure):
+    _fields_ = [('type', I), ('serial', U), ('send_event', I), ('display', D),
+        ('event', U), ('window', U), ('x', I), ('y', I), ('width', I), ('height', I),
+        ('border_width', I), ('above', U), ('override_redirect', I)]
+
+class FocusChange(c.Structure):
+    _fields_ = [('type', I), ('serial', U), ('send_event', I), ('display', D),
+        ('window', U), ('mode', I), ('detail', I)]
+
+class CreateWindow(c.Structure):
+    _fields_ = [('type', I), ('serial', U), ('send_event', I), ('display', D),
+        ('parent', U), ('window', U), ('x', I), ('y', I), ('width', I), ('height', I),
+        ('border_width', I), ('override_redirect', I)]
+
+class Map(c.Structure):
+    _fields_ = [('type', I), ('serial', U), ('send_event', I), ('display', D),
+        ('event', U), ('window', U), ('override_redirect', I)]
+
+class DestroyWindow(c.Structure):
+    _fields_ = [('type', I), ('serial', U), ('send_event', I), ('display', D),
+        ('event', U), ('window', U)]
+
 class Event(c.Union):
-    _fields_ = [('type', I), ('client', Client), ('pad', c.c_long * 24)]
+    _fields_ = [('type', I), ('client', Client), ('configure', Configure),
+        ('focus', FocusChange), ('create', CreateWindow), ('map', Map),
+        ('destroy', DestroyWindow), ('pad', c.c_long * 24)]
 
 declare('XSendEvent', [D, U, I, c.c_long, c.POINTER(Event)])
 declare('XNextEvent', [D, c.POINTER(Event)])
@@ -86,6 +122,26 @@ def message(d, dest, window, name, values, mask):
     X.XSendEvent(d, dest, 0, mask, c.byref(event))
     X.XFlush(d)
 
+# frame.py 建立的外框視窗用這個 WM_CLASS instance；Dock 也靠它對上 .desktop 的圖示。
+FRAME_CLASS = 'line-bottles'
+
+def is_frame_class(wm_class, instance=FRAME_CLASS):
+    return bool(wm_class) and wm_class.split(b'\0')[0] == instance.encode()
+
+def find_frame(d, root, instance=FRAME_CLASS):
+    """主機顯示器上 LINE 的外框視窗；找不到回傳 0。"""
+    for w in prop(d, root, '_NET_CLIENT_LIST') or []:
+        if is_frame_class(prop(d, w, 'WM_CLASS'), instance):
+            return w
+    return 0
+
+def activate(d, root, w):
+    """拉到最前面並給焦點；最小化的視窗也會被還原（_NET_ACTIVE_WINDOW 來源 2 = pager）。"""
+    X.XMapRaised(d, w)
+    message(d, root, w, '_NET_ACTIVE_WINDOW', [2, 0, 0], (1 << 20) | (1 << 19))
+    X.XSetInputFocus(d, w, 2, 0)
+    X.XSync(d, 0)
+
 def main():
     action = sys.argv[1]
     d = X.XOpenDisplay(sys.argv[2].encode())
@@ -108,14 +164,17 @@ def main():
                 ping=atom(d, '_NET_WM_PING') in (prop(d, w, 'WM_PROTOCOLS') or [])))
         focus, revert = U(), I()
         X.XGetInputFocus(d, c.byref(focus), c.byref(revert))
+        screen = X.XDefaultScreen(d)
         print(json.dumps(dict(wm=bool(prop(d, root, '_NET_SUPPORTING_WM_CHECK')),
-            windows=windows, focus=focus.value)))
+            windows=windows, focus=focus.value,
+            screen=[X.XDisplayWidth(d, screen), X.XDisplayHeight(d, screen)])))
     elif action == 'focus':
-        w = int(sys.argv[3])
-        X.XMapRaised(d, w)
-        message(d, root, w, '_NET_ACTIVE_WINDOW', [2, 0, 0], (1 << 20) | (1 << 19))
-        X.XSetInputFocus(d, w, 2, 0)
-        X.XSync(d, 0)
+        activate(d, root, int(sys.argv[3]))
+    elif action == 'focus-frame':
+        # 外框拿到焦點後會自己再轉給 Xephyr 的子視窗。第三個參數只給測試用的外框。
+        w = find_frame(d, root, *sys.argv[3:4])
+        if w:
+            activate(d, root, w)
     elif action == 'maximize':
         w = int(sys.argv[3])
         # EWMH _NET_WM_STATE：data[0] 1 = add，兩個 MAXIMIZED 狀態一起送即滿版，
