@@ -79,7 +79,7 @@ GNOME 桌面 (:1)
 | `lib/` | `session.py`(主控)、`x11.py`(ctypes Xlib)、`clipboard.py`(剪貼簿橋接)、`version.py`、`peversion.py` |
 | `systemd/` | 6 個 user unit |
 | `bottle/` | 建立 bottle、簽署 DLL、憑證設定 |
-| `tests/` | 純邏輯的 `unittest`:剪貼簿格式選擇、殘留行程清理(`python3 -m unittest discover tests`) |
+| `tests/` | 純邏輯的 `unittest`:剪貼簿格式選擇、Wine 剪貼簿視窗辨識、殘留行程清理(`python3 -m unittest discover tests`) |
 | `docs/` | 架構、疑難排解、版本管理 |
 
 `lib/` 下的程式只用 Python 標準函式庫,沒有第三方相依。

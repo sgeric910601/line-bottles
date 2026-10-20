@@ -18,6 +18,7 @@
 | 剪貼簿**完全不通** | `line-clipboard.service` 沒起來,或 `xclip` 沒裝 | `systemctl --user status line-clipboard`;`sudo apt install xclip` |
 | 剪貼簿**只有文字能過,圖片不行** | 來源那端沒有提供任何支援的圖片格式 | 查來源實際提供什麼:見下方「剪貼簿查不通時」 |
 | 剪貼簿**慢一拍**(約一秒) | `select()` 前沒有重新檢查 `XPending` | 見 `docs/architecture.md`「Xlib 配 select 的陷阱」 |
+| LINE 裡**複製的貼不出去**,外面複製的一點進 LINE 就被換成 **LINE 上次複製的舊內容** | Wine 11.0 接手剪貼簿的請求卡在 Xlib 送出緩衝區(`acquire_selection()` 少了 `XFlush`) | 橋接每 0.5 秒戳一下 Wine 的剪貼簿視窗;`clipboard.log` 應有「找到 Wine 剪貼簿視窗」。見 `docs/architecture.md`「Wine 11.0 的剪貼簿請求不會自己送出」 |
 | 關掉 LINE 後**剛複製的內容不見了** | X11 的選取區由擁有者行程持有,橋接一結束就沒有擁有者 | 不是 bug,見下方「剪貼簿的固有限制」 |
 | **點了沒反應**、Xephyr 裡一個視窗都沒有 | 上一輪留下死鎖的 `wineserver`,新的 LINE 全掛在它身上 | `preflight()` 的 `clear_stale()` 會自動處理;手動做法見下方「自動更新後整個打不開」 |
 | `line-bottles --stop` **也沒用** | `bottles-cli stop` 自己也卡在同一個殭屍上 | 同上 —— 別再試 `--stop`,直接下訊號 |
@@ -150,7 +151,11 @@ if ! osslsigncode verify -in "$dll" 2>&1 | grep -q "No signature found"; then
 systemctl --user status line-clipboard.service
 xprop -display :99 -root _LINE_CLIPBOARD_READY      # 應為 CARDINAL = 1
 tail ~/.local/state/line-bottles/clipboard.log      # 只有位元組數與格式,沒有內容
+grep 'Wine 剪貼簿視窗' ~/.local/state/line-bottles/clipboard.log | tail -2   # LINE 開著時應有「找到」
 ```
+
+LINE 開著卻一直沒有「找到 Wine 剪貼簿視窗」,LINE 裡複製的東西就會卡住出不來 ——
+多半是換了 Wine 執行器或開了虛擬桌面,特徵對不上了,見 `docs/architecture.md`。
 
 再看兩端各自實際提供什麼格式 —— **這是圖片貼不過去時唯一有用的一條線索**:
 

@@ -73,6 +73,7 @@ X11 的選取區(selection)是**綁在單一 X server 上**的協定:擁有者�
 | 格式 | 依序挑 `image/png → image/bmp → image/jpeg → UTF8_STRING → text/plain;charset=utf-8 → STRING`,**原樣轉送不做轉換**(Wine 的 winex11.drv 對圖片不一定給 png) |
 | 迴圈防護 | 記住自己上次裝在每一端的內容雜湊;所有權變動若來自自己就不再彈回去 |
 | 隱私 | 日誌只記位元組數與 target 名稱,**絕不記錄內容** |
+| Wine 喚醒 | 每 0.5 秒戳一下 Wine 的剪貼簿視窗,見下方「Wine 11.0 的剪貼簿請求不會自己送出」 |
 | 生命週期 | `BindsTo=line-xephyr` |
 
 ### 方向不對稱是刻意的
@@ -90,6 +91,39 @@ X11 的選取區(selection)是**綁在單一 X server 上**的協定:擁有者�
 主迴圈在 `select()` 之前一定要再檢查一次 `XPending`。Xlib 的任何往返呼叫(例如查
 `_NET_ACTIVE_WINDOW`)都會順手把已經到達的事件讀進**內部佇列**,fd 上就沒有資料了,
 `select()` 於是空等滿一秒才回來。實測這個差別是**剪貼簿延遲 1.5 秒 vs 0.05 秒**。
+
+### Wine 11.0 的剪貼簿請求不會自己送出
+
+症狀是兩個方向一起壞:LINE 裡複製的東西不會出現在主機;等你在外面複製、點回 LINE,
+橋接把外面的內容推進 `:99`,Wine 就在 20 ms 內把剪貼簿搶回去,換上 LINE 上次複製的舊內容,
+橋接再把舊內容送回主機,蓋掉你剛複製的東西。搶回之前 Wine 完全不讀新內容。
+
+原因在 Wine 的 `dlls/winex11.drv/clipboard.c`:`acquire_selection()` 呼叫 `XSetSelectionOwner`
+之後**沒有 `XFlush`**。這個請求卡在 Xlib 的送出緩衝區,要等那條 X 連線收到任何事件時才會順便送出 ——
+所以才會是「外面一動,LINE 的舊內容就冒出來」。上游 Wine 已在同一個函式補上 `XFlush( display );`,
+但 ValveSoftware/wine 的 `proton_11.0` 分支(`kron4ek-wine-proton-11.0-1` 的來源)還沒有。
+
+做法:橋接每 0.5 秒對 Wine 剪貼簿執行緒的 `import_window` 送一個 `_LINE_CLIPBOARD_FLUSH`
+ClientMessage。那個視窗在 Wine 裡沒有對應的 hwnd,Wine 收到後直接忽略,唯一的作用就是讓連線醒來、
+把緩衝區送出去。2026-10-20 實測:送出後 36 ms,Wine 就交出了 LINE 剛複製的內容。
+
+找視窗靠特徵,不靠寫死的 id:root 底下 1x1+0+0、未映射、沒有屬性、事件遮罩**恰好只有**
+`PropertyChangeMask`(Wine 在 `clipboard_init` 為了 INCR 這樣建它)。每條 Wine 連線都還有一個只選
+StructureNotify 的 1x1 視窗,遮罩不同所以不會認錯。xclip 持有選取區的視窗長得一模一樣,
+因此一律排除**目前的 CLIPBOARD 擁有者** —— Wine 的 `import_window` 只負責讀,永遠不會是擁有者。
+剪貼簿管理員是每個 Wine 桌面一個(在 `explorer.exe` 裡),當天 LINE 連通話、播放器子程式都開著,
+`:99` 上 93 個視窗裡也只有它一個符合。符合的超過 4 個時日誌會記一筆警告。
+注意遮罩是所有用戶端在該視窗上選的事件**聯集**:若別的程式也對它選了事件就會認不出來。
+
+限制:
+
+- 啟用 Wine 的虛擬桌面時,`import_window` 會變成桌面視窗的子視窗,特徵對不上,
+  `clipboard.log` 就不會出現「找到 Wine 剪貼簿視窗」。
+- 在 LINE 複製後 0.5 秒內就切出去、在外面複製、再切回來,仍可能被舊內容蓋掉。
+
+**何時可以拿掉**:執行器換成 `acquire_selection()` 已經有 `XFlush` 的版本之後。
+驗證法:暫時拿掉 `loop()` 裡的 `self.wake_wine()`,開著 LINE 重啟橋接,在 LINE 複製,
+主機馬上貼得出來就不再需要。
 
 ## 啟動與關閉順序
 

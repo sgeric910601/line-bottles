@@ -1,0 +1,7 @@
+{
+  "entries": [
+    {"date": "2026-10-20", "summary": "Clipboard bridge wakes Wine's clipboard window every 0.5 s: Wine 11.0 acquire_selection() lacks XFlush, so LINE copies never reached the host and host pastes bounced back as stale LINE content"}
+  ],
+  "blocked": null,
+  "next": "Make the Xephyr title-bar close button minimize instead of ending the LINE session"
+}
