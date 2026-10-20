@@ -17,6 +17,7 @@ import select as poller
 import shutil
 import subprocess as sp
 import sys
+import threading
 import time
 from typing import NamedTuple
 
@@ -27,6 +28,7 @@ LINE_DISPLAY = ':99'
 READY_PROPERTY = '_LINE_CLIPBOARD_READY'
 XA_CARDINAL = 6
 LIMIT = 32 * 1024 * 1024
+READ_CHUNK = 64 * 1024
 TIMEOUT = 5
 XFIXES_OWNER_MASK = 1
 PROPERTY_CHANGE_MASK = 1 << 22
@@ -84,6 +86,22 @@ def pick_target(available):
         if target in have:
             return target
     return None
+
+
+def read_capped(stream, limit, chunk=READ_CHUNK):
+    """從 stream 讀到結尾，回傳 (內容, 是否超過 limit)。
+
+    一超過就停，不再往下讀、也不保留已讀的部分：記憶體用量最多 limit 加一塊。
+    """
+    parts, total = [], 0
+    while True:
+        part = stream.read(chunk)
+        if not part:
+            return b''.join(parts), False
+        total += len(part)
+        if total > limit:
+            return b'', True
+        parts.append(part)
 
 
 def accept(data, installed):
@@ -170,8 +188,30 @@ def targets(display):
 
 
 def read_selection(display, target):
-    result = xclip(display, '-t', target, '-o')
-    return b'' if result.returncode else result.stdout
+    """讀出選取區內容，回傳 (資料, 是否超過上限)；讀不到時資料為空。
+
+    不用 run()：sp.run 會先把整份輸出讀進記憶體，上限只能事後檢查，
+    來源（例如 LINE 自己）放一份超大的剪貼簿就能撐爆橋接。這裡邊讀邊算，
+    一超過 LIMIT 就收掉 xclip；逾時由計時器收掉，讀到的半截內容也不採用。
+    """
+    try:
+        proc = sp.Popen(['xclip', '-display', display, '-selection', 'clipboard',
+                         '-t', target, '-o'], stdout=sp.PIPE, stderr=sp.DEVNULL)
+    except OSError:
+        return b'', False
+    timer = threading.Timer(TIMEOUT, proc.kill)
+    timer.daemon = True
+    timer.start()
+    try:
+        with proc:  # 離開時關掉管線並等 xclip 結束；卡住的話計時器還在
+            data, too_large = read_capped(proc.stdout, LIMIT)
+            if too_large:
+                proc.kill()
+    finally:
+        timer.cancel()
+    if too_large:
+        return b'', True
+    return (data if proc.returncode == 0 else b''), False
 
 
 def write_selection(display, target, data):
@@ -302,11 +342,12 @@ class Bridge:
         target = pick_target(targets(source))
         if not target:
             return
-        data = read_selection(source, target)
+        data, too_large = read_selection(source, target)
         digest, reason = accept(data, self.installed[source])
+        if too_large or reason == 'too-large':
+            logging.info('略過 %s → %s：超過 %d bytes 上限', source, destination, LIMIT)
+            return
         if not digest:
-            if reason == 'too-large':
-                logging.info('略過 %s → %s：%d bytes 超過上限', source, destination, len(data))
             return
         if write_selection(destination, target, data):
             self.installed[destination] = digest

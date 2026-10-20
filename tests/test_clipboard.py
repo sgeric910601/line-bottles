@@ -6,6 +6,7 @@ end-to-end behaviour is on the manual checklist.
 """
 import ctypes
 import hashlib
+import io
 import sys
 import unittest
 from pathlib import Path
@@ -75,6 +76,31 @@ WINE_IMPORT_WINDOW = dict(width=1, height=1, x=0, y=0, border=0, input_output=Tr
 def wine_window(**changes):
     """以 Wine 的 import_window 為底，逐項改掉來測反例。"""
     return clipboard.WindowInfo(**{**WINE_IMPORT_WINDOW, **changes})
+
+
+class ReadCapped(unittest.TestCase):
+    """上限要邊讀邊檢查：先整份讀進記憶體再比，來源就能用超大內容撐爆橋接。"""
+
+    def test_keeps_content_exactly_at_the_limit(self):
+        self.assertEqual(clipboard.read_capped(io.BytesIO(b'x' * 10), 10, chunk=3),
+                         (b'x' * 10, False))
+
+    def test_stops_one_byte_over_the_limit(self):
+        self.assertEqual(clipboard.read_capped(io.BytesIO(b'x' * 11), 10, chunk=3),
+                         (b'', True))
+
+    def test_stops_without_reading_the_rest(self):
+        stream = io.BytesIO(b'x' * 1000)
+        clipboard.read_capped(stream, 10, chunk=4)
+        self.assertLessEqual(stream.tell(), 12)  # 超過上限的那一塊就停，不再往下讀
+
+    def test_empty_stream(self):
+        self.assertEqual(clipboard.read_capped(io.BytesIO(b''), 10), (b'', False))
+
+    def test_joins_many_chunks_in_order(self):
+        data = bytes(range(256)) * 4
+        self.assertEqual(clipboard.read_capped(io.BytesIO(data), len(data), chunk=7),
+                         (data, False))
 
 
 class WineClipboardWindow(unittest.TestCase):
